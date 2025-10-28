@@ -6849,23 +6849,49 @@ function loadDashboard() {
         const now = new Date();
         const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         
+        // فلترة المبيعات: فقط paid أو partial من اليوم الحالي، وتجاهل المرتجعات والملغاة
         const todaySales = sales.filter(sale => {
             try {
-                // استخدام timestamp إذا كان متوفراً، وإلا fallback إلى date
+                // التحقق من التاريخ - اليوم الحالي فقط
                 const dateValue = sale.timestamp || sale.date;
                 const saleDate = new Date(dateValue);
                 if (isNaN(saleDate.getTime())) return false;
                 
-                // استخدام التوقيت المحلي للمقارنة
                 const saleDateStr = `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`;
-                return saleDateStr === today;
+                if (saleDateStr !== today) return false;
+                
+                // تجاهل المرتجعات والملغاة
+                if (sale.returned || sale.cancelled) return false;
+                
+                // فقط المبيعات المكتملة (paid) أو الجزئية (partial)
+                // المبيعات النقدية تعتبر paid تلقائياً
+                // المبيعات الجزئية لها partialDetails
+                const isPaid = sale.paymentMethod === 'نقدي' || sale.paymentMethod === 'Cash';
+                const isPartial = sale.partialDetails && sale.partialDetails.amountPaid > 0;
+                
+                return isPaid || isPartial;
             } catch (error) {
                 return false;
             }
         });
+        
+        // حساب إيرادات اليوم: مجموع المبالغ المقبوضة مطروحاً منها المرتجعات
         const todayRevenue = todaySales.reduce((sum, sale) => {
-            // تحويل جميع المبالغ إلى USD للحساب الموحد
-            const amountUSD = sale.amount || 0;
+            let amountUSD = sale.amount || 0;
+            
+            // إذا كانت مبيعة جزئية، نحسب فقط المبلغ المدفوع
+            if (sale.partialDetails) {
+                const paidAmount = sale.partialDetails.amountPaid || 0;
+                const paymentCurrency = sale.partialDetails.paymentCurrency;
+                
+                // تحويل إلى USD إذا لزم الأمر
+                if (paymentCurrency === 'LBP') {
+                    amountUSD = paidAmount / settings.exchangeRate;
+                } else {
+                    amountUSD = paidAmount;
+                }
+            }
+            
             return sum + amountUSD;
         }, 0);
         
@@ -14982,19 +15008,51 @@ function updateDashboardDirectly() {
         const currentCustomers = loadFromStorage('customers', []);
         const currentSales = loadFromStorage('sales', []);
         
-        // حساب إيرادات اليوم
-        const today = new Date().toISOString().split('T')[0];
+        // حساب إيرادات اليوم - فلترة صحيحة
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        
         const todaySales = currentSales.filter(sale => {
             try {
+                // التحقق من التاريخ - اليوم الحالي فقط
                 const dateValue = sale.timestamp || sale.date;
                 const saleDate = new Date(dateValue);
                 if (isNaN(saleDate.getTime())) return false;
-                return saleDate.toISOString().split('T')[0] === today;
+                
+                const saleDateStr = `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`;
+                if (saleDateStr !== today) return false;
+                
+                // تجاهل المرتجعات والملغاة
+                if (sale.returned || sale.cancelled) return false;
+                
+                // فقط المبيعات المكتملة (paid) أو الجزئية (partial)
+                const isPaid = sale.paymentMethod === 'نقدي' || sale.paymentMethod === 'Cash';
+                const isPartial = sale.partialDetails && sale.partialDetails.amountPaid > 0;
+                
+                return isPaid || isPartial;
             } catch (error) {
                 return false;
             }
         });
-        const todayRevenue = todaySales.reduce((sum, sale) => sum + (sale.amount || 0), 0);
+        
+        const todayRevenue = todaySales.reduce((sum, sale) => {
+            let amountUSD = sale.amount || 0;
+            
+            // إذا كانت مبيعة جزئية، نحسب فقط المبلغ المدفوع
+            if (sale.partialDetails) {
+                const paidAmount = sale.partialDetails.amountPaid || 0;
+                const paymentCurrency = sale.partialDetails.paymentCurrency;
+                
+                // تحويل إلى USD إذا لزم الأمر
+                if (paymentCurrency === 'LBP') {
+                    amountUSD = paidAmount / settings.exchangeRate;
+                } else {
+                    amountUSD = paidAmount;
+                }
+            }
+            
+            return sum + amountUSD;
+        }, 0);
         
         // تحديث العناصر مباشرة
         const todayRevenueEl = document.getElementById('todayRevenue');
