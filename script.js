@@ -589,18 +589,13 @@ function getDateRange(preset) {
     const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0, 23,59,59,999);
     switch(preset){
         case 'today': {
-            // استخدام الوقت المحلي الحالي تماماً دون تحويل UTC
+            // استخدام الدوال الموحدة للتوقيت المحلي
             const now = new Date();
+            const startToday = getStartOfLocalDay(now);
+            const endToday = getEndOfLocalDay(now);
             
-            // إنشاء بداية اليوم (00:00:00.000) باستخدام المنطقة الزمنية المحلية
-            const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-            
-            // إنشاء نهاية اليوم (23:59:59.999) باستخدام المنطقة الزمنية المحلية
-            const endToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-            
-            console.log(`📅 حساب "اليوم": ${now.toLocaleDateString()} (${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')})`);
-            console.log(`📅 نطاق اليوم: ${startToday.toLocaleDateString()} ${startToday.getHours()}:${String(startToday.getMinutes()).padStart(2, '0')} إلى ${endToday.toLocaleDateString()} ${endToday.getHours()}:${String(endToday.getMinutes()).padStart(2, '0')}`);
-            console.log(`📅 نطاق اليوم (ISO): من ${startToday.toISOString()} إلى ${endToday.toISOString()}`);
+            console.log(`📅 حساب "اليوم": ${getLocalDateString(now)} (${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')})`);
+            console.log(`📅 نطاق اليوم المحلي: ${startToday.toLocaleString('ar-LB')} إلى ${endToday.toLocaleString('ar-LB')}`);
             
             return [startToday, endToday];
         }
@@ -642,118 +637,38 @@ function renderProfitReports() {
             from = fV; to = tV;
         }
     }
-    // تأكد من صحة التواريخ
+    // تأكد من صحة التواريخ باستخدام الدوال الموحدة
     if (!(from instanceof Date) || isNaN(from.getTime())) { 
-        from = new Date(); 
-        from.setHours(0, 0, 0, 0); 
+        from = getStartOfLocalDay(); 
     }
     if (!(to instanceof Date) || isNaN(to.getTime())) { 
-        to = new Date(); 
-        to.setHours(23, 59, 59, 999); 
+        to = getEndOfLocalDay(); 
     }
     
-    // توحيد نطاق التاريخ لتجنب مشاكل التوقيت
-    const fromDate = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0);
-    const toDate = new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999);
+    // توحيد نطاق التاريخ باستخدام الدوال الموحدة
+    const fromDate = getStartOfLocalDay(from);
+    const toDate = getEndOfLocalDay(to);
     
     // استخدام التوقيت المحلي للتشخيص
-    console.log(`📅 نطاق التقرير المحلي: من ${fromDate.toLocaleDateString()} ${fromDate.getHours()}:${String(fromDate.getMinutes()).padStart(2, '0')} إلى ${toDate.toLocaleDateString()} ${toDate.getHours()}:${String(toDate.getMinutes()).padStart(2, '0')}`);
-    console.log(`📊 الفترة المحددة: ${preset} - اليوم الحالي: ${new Date().toLocaleDateString()}`);
+    console.log(`📅 نطاق التقرير المحلي: من ${getLocalDateString(fromDate)} إلى ${getLocalDateString(toDate)}`);
+    console.log(`📊 الفترة المحددة: ${preset} - اليوم الحالي: ${getLocalDateString()}`);
     
-    // دالة محسنة للتحقق من صحة التواريخ
-    function parseSaleDate(sale) {
-        const saleDateValue = sale.timestamp || sale.date || sale.returnDate;
-        
-        if (!saleDateValue) {
-            return null; // لا يوجد تاريخ للمبيع
-        }
-        
-        try {
-            let parsedDate;
-            
-            if (typeof saleDateValue === 'string' && saleDateValue.includes('T')) {
-                // timestamp محلي بدون timezone
-                if (!saleDateValue.includes('Z') && !saleDateValue.includes('+') && !saleDateValue.includes('-', 10)) {
-                    const parts = saleDateValue.split('T');
-                    if (parts.length === 2) {
-                        const [datePart, timePart] = parts;
-                        const [year, month, day] = datePart.split('-').map(Number);
-                        const timeWithMs = timePart.includes('.') ? timePart : timePart + '.000';
-                        const [timeOnly, ms] = timeWithMs.split('.');
-                        const [hours, minutes, seconds] = timeOnly.split(':').map(Number);
-                        parsedDate = new Date(year, month - 1, day, hours, minutes, seconds, Number(ms.padEnd(3, '0')));
-                    } else {
-                        parsedDate = new Date(saleDateValue);
-                    }
-                } else {
-                    parsedDate = new Date(saleDateValue);
-                }
-            } else {
-                parsedDate = new Date(saleDateValue);
-            }
-            
-            return isNaN(parsedDate.getTime()) ? null : parsedDate;
-        } catch (error) {
-            console.warn('خطأ في تحليل تاريخ البيع:', sale, error);
-            return null;
-        }
-    }
-    
-    // دالة محسنة للتحقق من النطاق الزمني مع تشخيص مفصل
+    // استخدام الدوال الموحدة للتحقق من النطاق الزمني مع تشخيص مفصل
     const isSaleInRange = (sale) => {
-        const saleDate = parseSaleDate(sale);
-        if (!saleDate) {
-            console.log(`❌ بيع بدون تاريخ صحيح:`, sale);
-            return false; // تجاهل المبيعات بدون تاريخ صحيح
-        }
+        const result = isSaleInDateRange(sale, fromDate, toDate);
         
-        // مقارنة دقيقة للتواريخ - استخدام window الصحيح للمنطقة الزمنية المحلية
-        // start_of_day <= sale_date < start_of_next_day للمنطقة الزمنية المحلية
-        const saleYear = saleDate.getFullYear();
-        const saleMonth = saleDate.getMonth();
-        const saleDay = saleDate.getDate();
-        
-        const fromYear = fromDate.getFullYear();
-        const fromMonth = fromDate.getMonth();
-        const fromDay = fromDate.getDate();
-        
-        const toYear = toDate.getFullYear();
-        const toMonth = toDate.getMonth();
-        const toDay = toDate.getDate();
-        
-        // إنشاء بداية ونهاية النطاق بالمنطقة الزمنية المحلية
-        const rangeStart = new Date(fromYear, fromMonth, fromDay, 0, 0, 0, 0);
-        const rangeEnd = new Date(toYear, toMonth, toDay, 23, 59, 59, 999);
-        
-        // التحقق من أن وقت البيع ضمن النطاق المحلي
-        const isInRange = saleDate >= rangeStart && saleDate <= rangeEnd;
-        
-        // تشخيص مفصل للبيع باستخدام التوقيت المحلي
-        if (sale.invoiceNumber) {
-            // استخدام التوقيت المحلي بدلاً من ISO لتجنب مشاكل UTC
-            const saleDateStr = `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`;
-            const fromDateStr = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`;
-            const toDateStr = `${toDate.getFullYear()}-${String(toDate.getMonth() + 1).padStart(2, '0')}-${String(toDate.getDate()).padStart(2, '0')}`;
-            
-            console.log(`🔍 فحص بيع ${sale.invoiceNumber}: ${saleDateStr} (من ${fromDateStr} إلى ${toDateStr}) - ضمن النطاق: ${isInRange}`);
-            
-            if (!isInRange) {
-                console.log(`❌ بيع خارج النطاق: ${sale.invoiceNumber}`, {
-                    saleDateLocal: saleDateStr,
-                    saleTimestamp: sale.timestamp || sale.date,
-                    fromDateLocal: fromDateStr,
-                    toDateLocal: toDateStr,
-                    preset: preset,
-                    before: saleDate < fromDate,
-                    after: saleDate > toDate,
-                    saleTime: saleDate.getHours() + ':' + String(saleDate.getMinutes()).padStart(2, '0'),
-                    fromTime: fromDate.getHours() + ':' + String(fromDate.getMinutes()).padStart(2, '0'),
-                    toTime: toDate.getHours() + ':' + String(toDate.getMinutes()).padStart(2, '0')
-                });
+        // تشخيص مفصل للبيع
+        if (sale.invoiceNumber && result) {
+            const saleDate = parseLocalDate(sale.timestamp || sale.date || sale.returnDate);
+            if (saleDate) {
+                const saleDateStr = getLocalDateString(saleDate);
+                const fromDateStr = getLocalDateString(fromDate);
+                const toDateStr = getLocalDateString(toDate);
+                console.log(`✅ بيع ضمن النطاق: ${sale.invoiceNumber} في ${saleDateStr}`);
             }
         }
         
-        return isInRange;
+        return result;
     };
     
     // تصفية المبيعات بناءً على النطاق الزمني والفلتر المحدد
@@ -3397,7 +3312,48 @@ function getText(key) {
     return translations[currentLanguage][key] || key;
 }
 
-// دالة للحصول على الوقت المحلي كـ ISO string
+// ========================================
+// دوال إدارة التوقيت الموحدة - المنطقة الزمنية Asia/Beirut
+// ========================================
+
+/**
+ * تحويل تاريخ من أي تنسيق إلى كائن Date محلي
+ * التعامل مع timestamps محلية وUTC بشكل صحيح
+ */
+function parseLocalDate(dateValue) {
+    if (!dateValue) return null;
+    
+    // إذا كان كائن Date
+    if (dateValue instanceof Date) {
+        return dateValue;
+    }
+    
+    // إذا كان string
+    if (typeof dateValue === 'string') {
+        // timestamp محلي بدون timezone (الشكل المفضل: YYYY-MM-DDTHH:mm:ss.sss)
+        if (dateValue.includes('T') && !dateValue.includes('Z') && !dateValue.includes('+') && !dateValue.includes('-', 10)) {
+            const parts = dateValue.split('T');
+            if (parts.length === 2) {
+                const [datePart, timePart] = parts;
+                const [year, month, day] = datePart.split('-').map(Number);
+                const timeWithMs = timePart.includes('.') ? timePart : timePart + '.000';
+                const [timeOnly, ms] = timeWithMs.split('.');
+                const [hours, minutes, seconds] = timeOnly.split(':').map(Number);
+                return new Date(year, month - 1, day, hours, minutes, seconds, Number(ms.padEnd(3, '0')));
+            }
+        }
+        
+        // محاولة parsing عادي (يعالج UTC والأنماط الأخرى)
+        return new Date(dateValue);
+    }
+    
+    return null;
+}
+
+/**
+ * إنشاء timestamp محلي بتنسيق ISO (بدون timezone)
+ * الشكل: YYYY-MM-DDTHH:mm:ss.sss
+ */
 function getLocalDateTimeISO() {
     const now = new Date();
     // إنشاء timestamp محلي بدون تحويل timezone
@@ -3412,7 +3368,9 @@ function getLocalDateTimeISO() {
     return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
 }
 
-// دالة للحصول على التاريخ المحلي فقط (YYYY-MM-DD)
+/**
+ * الحصول على التاريخ المحلي فقط (YYYY-MM-DD)
+ */
 function getLocalDateString(date = null) {
     const d = date || new Date();
     const year = d.getFullYear();
@@ -3420,6 +3378,49 @@ function getLocalDateString(date = null) {
     const day = String(d.getDate()).padStart(2, '0');
     
     return `${year}-${month}-${day}`;
+}
+
+/**
+ * إنشاء بداية اليوم المحلي (00:00:00.000)
+ */
+function getStartOfLocalDay(date = null) {
+    const d = date || new Date();
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+/**
+ * إنشاء نهاية اليوم المحلي (23:59:59.999)
+ */
+function getEndOfLocalDay(date = null) {
+    const d = date || new Date();
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+}
+
+/**
+ * التحقق من أن البيع في نطاق تاريخ محدد (باستخدام التواريخ المحلية)
+ */
+function isSaleInDateRange(sale, startDate, endDate) {
+    const saleDate = parseLocalDate(sale.timestamp || sale.date || sale.returnDate);
+    if (!saleDate) return false;
+    
+    // إنشاء نطاقات محلية
+    const rangeStart = getStartOfLocalDay(startDate);
+    const rangeEnd = getEndOfLocalDay(endDate);
+    
+    return saleDate >= rangeStart && saleDate <= rangeEnd;
+}
+
+/**
+ * التحقق من أن البيع في تاريخ محدد بالضبط
+ */
+function isSaleOnDate(sale, targetDate) {
+    const saleDate = parseLocalDate(sale.timestamp || sale.date || sale.returnDate);
+    if (!saleDate) return false;
+    
+    const target = targetDate instanceof Date ? targetDate : new Date(targetDate);
+    return saleDate.getFullYear() === target.getFullYear() &&
+           saleDate.getMonth() === target.getMonth() &&
+           saleDate.getDate() === target.getDate();
 }
 
 // دالة لتنسيق التاريخ والوقت
@@ -5778,11 +5779,88 @@ function generateTimestampReport() {
     return report;
 }
 
+// دالة لإصلاح وتسوية بيانات الربح وإعادة حساب اليوم والأمس
+function recalculateProfitAndFixNegativeValues() {
+    console.log('🔧 بدء إعادة حساب الربح وإصلاح القيم السالبة...');
+    
+    let fixedCount = 0;
+    let recalculatedCount = 0;
+    const today = getLocalDateString();
+    const yesterday = getLocalDateString(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    
+    // إصلاح timestamps أولاً
+    const timestampResult = fixOldSalesTimestamps();
+    
+    // الآن إعادة حساب الربح لكل المبيعات
+    sales.forEach(sale => {
+        if (!sale.items || !Array.isArray(sale.items) || sale.items.length === 0) {
+            return; // تجاهل المبيعات بدون عناصر
+        }
+        
+        try {
+            let totalGross = 0;
+            let totalCost = 0;
+            
+            sale.items.forEach(item => {
+                const quantity = item.quantity || 1;
+                const pricePerUnit = item.price || item.priceUSD || 0;
+                const costPerUnit = item.cost || item.costUSD || 0;
+                
+                totalGross += quantity * pricePerUnit;
+                totalCost += quantity * costPerUnit;
+            });
+            
+            // حساب الربح الصافي
+            const netProfit = totalGross - totalCost;
+            
+            // التحقق من أن القيمة غير سالبة (إلا في حالات المرتجعات)
+            const saleDate = parseLocalDate(sale.timestamp || sale.date);
+            const saleDateStr = saleDate ? getLocalDateString(saleDate) : '';
+            const isTodayOrYesterday = saleDateStr === today || saleDateStr === yesterday;
+            
+            if (isTodayOrYesterday && netProfit < 0 && !sale.returned) {
+                console.warn(`⚠️ ربح سالب للبيع ${sale.invoiceNumber}: ${netProfit.toFixed(2)}`);
+                fixedCount++;
+            }
+            
+            recalculatedCount++;
+            
+        } catch (error) {
+            console.error(`❌ خطأ في إعادة حساب الربح للبيع ${sale.invoiceNumber}:`, error);
+        }
+    });
+    
+    console.log(`📊 تمت إعادة حساب ${recalculatedCount} من المبيعات`);
+    console.log(`⚠️ وجدت ${fixedCount} من المبيعات بربح سالب في اليوم أو أمس`);
+    
+    const lang = document.documentElement.lang || 'en';
+    const message = lang === 'en' 
+        ? `Recalculated profit for ${recalculatedCount} sales. Found ${fixedCount} with negative profit.`
+        : `تمت إعادة حساب الربح لـ ${recalculatedCount} من المبيعات. وجدت ${fixedCount} بربح سالب.`;
+    
+    showMessage(message, recalculatedCount > 0 ? 'success' : 'info');
+    
+    // إعادة تحميل التقارير
+    if (typeof renderProfitReports === 'function') {
+        setTimeout(() => renderProfitReports(), 100);
+    }
+    if (typeof loadDashboard === 'function') {
+        setTimeout(() => loadDashboard(), 100);
+    }
+    
+    return {
+        timestampFixed: timestampResult.fixed,
+        profitRecalculated: recalculatedCount,
+        negativeProfitFound: fixedCount
+    };
+}
+
 // دالة للاختبار والإصلاح اليدوي - يمكن استدعاؤها من console
 window.fixOldSalesTimestamps = fixOldSalesTimestamps;
 window.checkSalesTimestampsStatus = checkSalesTimestampsStatus;
 window.validateReportsAccuracy = validateReportsAccuracy;
 window.generateTimestampReport = generateTimestampReport;
+window.recalculateProfitAndFixNegativeValues = recalculateProfitAndFixNegativeValues;
 
 // دالة سريعة للفحص والإصلاح في console
 window.quickTimestampFix = function() {
@@ -6845,20 +6923,14 @@ function loadDashboard() {
         customers = loadFromStorage('customers', []);
         sales = loadFromStorage('sales', []);
         
-        // حساب إيرادات اليوم (المبيعات اليوم فقط) - استخدام التوقيت المحلي
-        const now = new Date();
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        // حساب إيرادات اليوم (المبيعات اليوم فقط) - استخدام التوقيت المحلي الموحد
+        const today = getLocalDateString();
         
         // فلترة المبيعات: فقط paid أو partial من اليوم الحالي، وتجاهل المرتجعات والملغاة
         const todaySales = sales.filter(sale => {
             try {
-                // التحقق من التاريخ - اليوم الحالي فقط
-                const dateValue = sale.timestamp || sale.date;
-                const saleDate = new Date(dateValue);
-                if (isNaN(saleDate.getTime())) return false;
-                
-                const saleDateStr = `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`;
-                if (saleDateStr !== today) return false;
+                // استخدام الدالة الموحدة للتحقق من التاريخ
+                if (!isSaleOnDate(sale, new Date())) return false;
                 
                 // تجاهل المرتجعات والملغاة
                 if (sale.returned || sale.cancelled) return false;
@@ -12636,25 +12708,21 @@ function applyFilterDirectly() {
         now: new Date().toISOString()
     });
     
-    // تصفية المبيعات
+    // تصفية المبيعات باستخدام الدوال الموحدة
     const filtered = sales.filter(s => {
         try {
-            const dateValue = s.timestamp || s.date;
-            const saleDate = new Date(dateValue);
-            if (isNaN(saleDate.getTime())) return false;
+            const saleDate = parseLocalDate(s.timestamp || s.date);
+            if (!saleDate) return false;
             
-            // إصلاح مقارنة التواريخ
-            const isInRange = saleDate >= from && saleDate <= to;
+            // استخدام الدالة الموحدة للتحقق من النطاق
+            const isInRange = isSaleInDateRange(s, from, to);
             
             // إضافة console log لتتبع المشكلة
-            if (preset === 'today') {
-                console.log('🔍 فحص بيع للتاريخ:', {
+            if (preset === 'today' && isInRange) {
+                console.log('✅ بيع ضمن نطاق اليوم:', {
                     id: s.id,
-                    dateValue: dateValue,
-                    saleDate: saleDate.toISOString(),
-                    from: from.toISOString(),
-                    to: to.toISOString(),
-                    isInRange: isInRange
+                    dateValue: s.timestamp || s.date,
+                    invoiceNumber: s.invoiceNumber
                 });
             }
             
@@ -12728,26 +12796,16 @@ function showSalesReport() {
         to: range.to.toISOString()
     });
     
-    // تصفية المبيعات
+    // تصفية المبيعات باستخدام الدوال الموحدة
     const filtered = sales.filter(s => {
         try {
-            // استخدام timestamp إذا كان متوفراً، وإلا fallback إلى date
-            const dateValue = s.timestamp || s.date;
-            const saleDate = new Date(dateValue);
-            if (isNaN(saleDate.getTime())) {
+            const saleDate = parseLocalDate(s.timestamp || s.date);
+            if (!saleDate) {
                 console.warn('Invalid date in sale:', s);
                 return false;
             }
             
-            const isInRange = saleDate >= range.from && saleDate <= range.to;
-            if (isInRange) {
-                console.log('✅ بيع ضمن النطاق:', {
-                    id: s.id,
-                    date: saleDate.toISOString(),
-                    amount: s.amount
-                });
-            }
-            
+            const isInRange = isSaleInDateRange(s, range.from, range.to);
             return isInRange;
         } catch (error) {
             console.warn('Error filtering sale by date:', s, error);
@@ -12759,20 +12817,11 @@ function showSalesReport() {
     const totalSales = filtered.reduce((sum, sale) => sum + (sale.amount || 0), 0);
     const totalTransactions = filtered.length;
     const averageTransaction = totalTransactions > 0 ? totalSales / totalTransactions : 0;
-    // استخدام التوقيت المحلي لحساب اليوم
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     
+    // استخدام التوقيت المحلي لحساب اليوم باستخدام الدوال الموحدة
     const todaySales = filtered.filter(sale => {
         try {
-            // استخدام timestamp إذا كان متوفراً، وإلا fallback إلى date
-            const dateValue = sale.timestamp || sale.date;
-            const saleDate = new Date(dateValue);
-            if (isNaN(saleDate.getTime())) return false;
-            
-            // استخدام التوقيت المحلي للمقارنة
-            const saleDateStr = `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`;
-            return saleDateStr === todayStr;
+            return isSaleOnDate(sale, new Date());
         } catch (error) {
             return false;
         }
@@ -15008,19 +15057,13 @@ function updateDashboardDirectly() {
         const currentCustomers = loadFromStorage('customers', []);
         const currentSales = loadFromStorage('sales', []);
         
-        // حساب إيرادات اليوم - فلترة صحيحة
-        const now = new Date();
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        // حساب إيرادات اليوم - فلترة صحيحة باستخدام الدوال الموحدة
+        const today = getLocalDateString();
         
         const todaySales = currentSales.filter(sale => {
             try {
-                // التحقق من التاريخ - اليوم الحالي فقط
-                const dateValue = sale.timestamp || sale.date;
-                const saleDate = new Date(dateValue);
-                if (isNaN(saleDate.getTime())) return false;
-                
-                const saleDateStr = `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`;
-                if (saleDateStr !== today) return false;
+                // استخدام الدالة الموحدة للتحقق من التاريخ
+                if (!isSaleOnDate(sale, new Date())) return false;
                 
                 // تجاهل المرتجعات والملغاة
                 if (sale.returned || sale.cancelled) return false;
@@ -16675,29 +16718,36 @@ document.addEventListener('DOMContentLoaded', function() {
         updateCustomerSelectForCredit();
     }, 500);
 
-    // فحص وإصلاح timestamps المبيعات القديمة (مرة واحدة فقط)
+    // فحص وإصلاح تلقائي لتوقيت وربح المبيعات (مرة واحدة فقط عند تحميل الصفحة)
     setTimeout(() => {
         try {
             const lastFixCheck = localStorage.getItem('salesTimestampFixCheck');
-            const today = new Date().toISOString().split('T')[0];
+            const today = getLocalDateString();
             
             // تشغيل الفحص مرة واحدة في اليوم فقط
             if (lastFixCheck !== today) {
-                const status = checkSalesTimestampsStatus();
+                console.log('🔍 فحص يومي شامل لتوقيت وربح المبيعات...');
                 
-                if (status.needsFix > 0) {
-                    console.log(`🔧 تم اكتشاف ${status.needsFix} من المبيعات تحتاج إصلاح timestamp`);
-                    // تشغيل إصلاح تلقائي
-                    fixOldSalesTimestamps();
-                } else {
-                    console.log('✅ جميع المبيعات تحتوي على timestamps صحيحة');
+                // تشغيل الإصلاح الشامل (يقوم بإصلاح timestamps وإعادة حساب الربح)
+                try {
+                    recalculateProfitAndFixNegativeValues();
+                } catch (error) {
+                    console.error('خطأ في الإصلاح الشامل، حاول بشكل منفصل:', error);
+                    // محاولة إصلاح timestamps فقط
+                    const status = checkSalesTimestampsStatus();
+                    if (status.needsFix > 0) {
+                        fixOldSalesTimestamps();
+                    }
                 }
                 
                 // حفظ تاريخ آخر فحص
                 localStorage.setItem('salesTimestampFixCheck', today);
+                console.log('✅ اكتمل الفحص الشامل لتوقيت وربح المبيعات');
+            } else {
+                console.log('📅 تم إجراء الفحص اليوم - تخطي');
             }
         } catch (error) {
-            console.error('خطأ في فحص timestamps المبيعات:', error);
+            console.error('خطأ في فحص timestamps وربح المبيعات:', error);
         }
     }, 1000);
 
