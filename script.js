@@ -652,19 +652,23 @@ function renderProfitReports() {
     // استخدام التوقيت المحلي للتشخيص
     console.log(`📅 نطاق التقرير المحلي: من ${getLocalDateString(fromDate)} إلى ${getLocalDateString(toDate)}`);
     console.log(`📊 الفترة المحددة: ${preset} - اليوم الحالي: ${getLocalDateString()}`);
+    console.log(`📊 إجمالي المبيعات في النظام: ${sales.length}`);
     
     // استخدام الدوال الموحدة للتحقق من النطاق الزمني مع تشخيص مفصل
     const isSaleInRange = (sale) => {
         const result = isSaleInDateRange(sale, fromDate, toDate);
         
         // تشخيص مفصل للبيع
-        if (sale.invoiceNumber && result) {
+        if (sale.invoiceNumber && preset === 'today') {
             const saleDate = parseLocalDate(sale.timestamp || sale.date || sale.returnDate);
             if (saleDate) {
                 const saleDateStr = getLocalDateString(saleDate);
                 const fromDateStr = getLocalDateString(fromDate);
-                const toDateStr = getLocalDateString(toDate);
-                console.log(`✅ بيع ضمن النطاق: ${sale.invoiceNumber} في ${saleDateStr}`);
+                if (result) {
+                    console.log(`✅ بيع ضمن النطاق: ${sale.invoiceNumber} في ${saleDateStr}`);
+                } else {
+                    console.log(`❌ بيع خارج النطاق: ${sale.invoiceNumber} (${saleDateStr}) للفترة ${fromDateStr}`);
+                }
             }
         }
         
@@ -674,7 +678,15 @@ function renderProfitReports() {
     // تصفية المبيعات بناءً على النطاق الزمني والفلتر المحدد
     let filteredSales = sales.filter(sale => {
         // التحقق من صحة البيع أولاً
-        if (!sale || !sale.items || !Array.isArray(sale.items) || sale.items.length === 0) {
+        if (!sale) {
+            if (preset === 'today') console.log('❌ مبيع بدون بيانات');
+            return false; // تجاهل المبيعات غير الصالحة
+        }
+        
+        if (!sale.items || !Array.isArray(sale.items) || sale.items.length === 0) {
+            if (preset === 'today' && sale.invoiceNumber) {
+                console.log(`❌ مبيع بدون عناصر: ${sale.invoiceNumber}`);
+            }
             return false; // تجاهل المبيعات غير الصالحة
         }
         
@@ -700,6 +712,9 @@ function renderProfitReports() {
     });
     
     console.log(`📊 عدد المبيعات الصالحة بعد التصفية: ${filteredSales.length}`);
+    if (preset === 'today' && filteredSales.length === 0 && sales.length > 0) {
+        console.warn('⚠️ لا توجد مبيعات لليوم! يرجى التحقق من التواريخ في Console');
+    }
     
     // التحقق من وجود مبيعات فعلية في الفترة المحددة
     if (filteredSales.length === 0) {
@@ -806,8 +821,8 @@ function renderProfitReports() {
             const isRefund = sale.returned === true;
             const sign = isRefund ? -1 : 1;
             
-            // الحصول على تاريخ البيع الصحيح
-            const saleDate = parseSaleDate(sale);
+            // الحصول على تاريخ البيع الصحيح باستخدام الدالة الموحدة
+            const saleDate = parseLocalDate(sale.timestamp || sale.date || sale.returnDate);
             if (!saleDate) {
                 console.warn(`تجاهل مبيع ${index + 1}: تاريخ غير صحيح`, sale);
                 return;
