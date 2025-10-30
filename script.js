@@ -234,7 +234,7 @@ function getExpensesData() {
             
             return {
                 id: tr.id || Date.now() + Math.random(),
-                date: tr.timestamp || tr.date || new Date().toISOString(),
+                date: tr.timestamp || tr.date || getLocalDateTimeISO(),
                 category: tr.category || 'عام',
                 description: tr.description || tr.note || '',
                 originalAmount: amount,
@@ -371,7 +371,7 @@ function recordProductSupplyExpense(productName, quantity, unitCost, currency = 
         
         // إنشاء معاملة النفقة
         const expenseTransaction = {
-            timestamp: new Date().toISOString(),
+            timestamp: getLocalDateTimeISO(), // استخدام التوقيت المحلي بدلاً من UTC
             type: 'expense',
             amount: totalCost,
             currency: currency,
@@ -388,7 +388,7 @@ function recordProductSupplyExpense(productName, quantity, unitCost, currency = 
         
         // إضافة المعاملة
         cashDrawer.transactions.push(expenseTransaction);
-        cashDrawer.lastUpdate = new Date().toISOString();
+        cashDrawer.lastUpdate = getLocalDateTimeISO(); // استخدام التوقيت المحلي بدلاً من UTC
         
         // حفظ البيانات
         saveToStorage('cashDrawer', cashDrawer);
@@ -1490,7 +1490,7 @@ function recordStockMovement(type, productId, quantity, invoiceNumber, note) {
     try {
         const movements = loadFromStorage('stockMovements', []);
         movements.push({
-            timestamp: new Date().toISOString(),
+            timestamp: getLocalDateTimeISO(), // استخدام التوقيت المحلي بدلاً من UTC
             type, // 'sale' | 'refund' | 'adjustment'
             productId,
             quantity,
@@ -2122,7 +2122,7 @@ function clearAllOperationalData() {
             cashUSD: 100.00,
             cashLBP: 0,
             transactions: [],
-            lastUpdate: new Date().toISOString()
+            lastUpdate: getLocalDateTimeISO()
         };
         saveToStorage('cashDrawer', cashDrawer);
         
@@ -4860,14 +4860,14 @@ function recordSupplierPaymentCash(amount, currency, method, note) {
         cashDrawer.cashLBP = (cashDrawer.cashLBP || 0) - Math.round(amt);
     }
     cashDrawer.transactions.push({
-        timestamp: new Date().toISOString(),
+        timestamp: getLocalDateTimeISO(),
         type: 'supplier_payment',
         amount: amt,
         currency: currency,
         description: note || 'Supplier payment',
         user: (currentUser && currentUser.name) || 'user'
     });
-    cashDrawer.lastUpdate = new Date().toISOString();
+    cashDrawer.lastUpdate = getLocalDateTimeISO();
     saveToStorage('cashDrawer', cashDrawer);
 }
 
@@ -5029,7 +5029,7 @@ function confirmSupplierPayment() {
 let cashDrawer = loadFromStorage('cashDrawer', {
     cashUSD: 100.00,  // النقدية بالدولار
     cashLBP: 500000,  // النقدية بالليرة
-    lastUpdate: new Date().toISOString(),
+    lastUpdate: getLocalDateTimeISO(),
     transactions: []  // سجل المعاملات النقدية
 });
 
@@ -5091,8 +5091,20 @@ window.addEventListener('message', function(event) {
 });
 
 // وظائف إدارة البيانات المحلية
+// نظام قفل الكتابة لمنع الكتابة المتداخلة
+let storageWriteLock = false;
+
 function saveToStorage(key, data) {
+    // منع الكتابة المتداخلة
+    if (storageWriteLock) {
+        console.warn(`⚠️ هناك عملية حفظ قيد التنفيذ، تخطي: ${key}`);
+        return false;
+    }
+    
     try {
+        // تفعيل القفل
+        storageWriteLock = true;
+        
         // التحقق من صحة البيانات قبل الحفظ
         if (!data) {
             console.warn(`⚠️ محاولة حفظ بيانات فارغة للمفتاح: ${key}`);
@@ -5169,6 +5181,9 @@ function saveToStorage(key, data) {
         }
         
         return false;
+    } finally {
+        // إلغاء القفل دائماً
+        storageWriteLock = false;
     }
 }
 
@@ -5711,6 +5726,17 @@ function recoverMissingData() {
                 } else {
                     console.warn(`❌ لا توجد نسخ احتياطية لـ ${key}`);
                 }
+            } else {
+                // البيانات موجودة - التحقق من سلامتها
+                console.log(`✅ ${key}: ${current.length} عنصر موجود`);
+                
+                // إذا كان sales، فحص الفواتير الفارغة
+                if (key === 'sales' && current.length > 0) {
+                    const brokenSales = current.filter(s => !s || !s.items || !Array.isArray(s.items) || s.items.length === 0);
+                    if (brokenSales.length > 0) {
+                        console.warn(`⚠️ ${brokenSales.length} فاتورة غير كاملة في ${key}`);
+                    }
+                }
             }
         } catch (error) {
             console.error(`❌ خطأ في استرجاع ${key}:`, error);
@@ -5721,7 +5747,7 @@ function recoverMissingData() {
         console.log(`🎉 تم استرجاع ${recoveredCount} مجموعة بيانات من النسخ الاحتياطية`);
         showMessage(`تم استرجاع ${recoveredCount} مجموعة بيانات من النسخ الاحتياطية`, 'success');
     } else {
-        console.log('✅ لا توجد بيانات مفقودة');
+        console.log('✅ لا توجد بيانات مفقودة - جميع البيانات سليمة');
     }
     
     return recoveredCount;
@@ -6461,7 +6487,7 @@ function updateCashDrawer(amountReceived, currency, changeGiven, changeCurrency)
     
     // تسجيل المعاملة
     cashDrawer.transactions.push({
-        timestamp: new Date().toISOString(),
+        timestamp: getLocalDateTimeISO(),
         type: 'sale',
         amountReceived: amountReceived,
         receivedCurrency: currency,
@@ -6473,7 +6499,7 @@ function updateCashDrawer(amountReceived, currency, changeGiven, changeCurrency)
         }
     });
     
-    cashDrawer.lastUpdate = new Date().toISOString();
+    cashDrawer.lastUpdate = getLocalDateTimeISO();
     saveToStorage('cashDrawer', cashDrawer);
 }
 
@@ -8451,7 +8477,7 @@ document.getElementById('processPayment').addEventListener('click', function() {
         }
         
         // حفظ الصندوق وتحديث العرض
-        cashDrawer.lastUpdate = new Date().toISOString();
+        cashDrawer.lastUpdate = getLocalDateTimeISO();
         saveToStorage('cashDrawer', cashDrawer);
         updateCashDrawerDisplay();
         
@@ -8560,7 +8586,7 @@ document.getElementById('processPayment').addEventListener('click', function() {
             }
         });
         
-        cashDrawer.lastUpdate = new Date().toISOString();
+        cashDrawer.lastUpdate = getLocalDateTimeISO();
         saveToStorage('cashDrawer', cashDrawer);
         
         // تحديث عرض الصندوق فوراً
@@ -8637,7 +8663,7 @@ document.getElementById('processPayment').addEventListener('click', function() {
                 // });
                 if (!Array.isArray(customer.creditHistory)) customer.creditHistory = [];
                 customer.creditHistory.push({
-                    timestamp: new Date().toISOString(),
+                    timestamp: getLocalDateTimeISO(),
                     type: 'settlement',
                     amount: -previousAccountAmount,
                     description: 'تسوية دين سابق عبر بيع نقدي',
@@ -9590,7 +9616,7 @@ document.getElementById('confirmPayDebt')?.addEventListener('click', function(){
 
     // تحديث الصندوق بإضافة المبلغ المدفوع
     if (currencySel.value === 'USD') { cashDrawer.cashUSD += amount; } else { cashDrawer.cashLBP += amount; }
-    cashDrawer.lastUpdate = new Date().toISOString();
+    cashDrawer.lastUpdate = getLocalDateTimeISO();
     saveToStorage('cashDrawer', cashDrawer);
     updateCashDrawerDisplay();
 
@@ -9805,7 +9831,7 @@ function returnInvoice(invoiceNumber) {
             }
             
             cashDrawer.transactions.push({
-                date: new Date().toISOString(),
+                date: getLocalDateTimeISO(),
                 type: 'deposit',
                 amountUSD: currency === 'USD' ? paidAmount : 0,
                 amountLBP: currency === 'LBP' ? paidAmount : 0,
@@ -10856,7 +10882,7 @@ function initializeAddQuantityFormHandler() {
                         // تقليل الرصيد في الصندوق بالقيمة المدفوعة
                         if (cashDrawer.cashUSD !== undefined) {
                             cashDrawer.cashUSD = (cashDrawer.cashUSD || 0) - totalExpense;
-                            cashDrawer.lastUpdate = new Date().toISOString();
+                            cashDrawer.lastUpdate = getLocalDateTimeISO();
                             saveToStorage('cashDrawer', cashDrawer);
                             
                             console.log(`💰 تم تحديث الصندوق: -$${totalExpense.toFixed(2)} (توريد منتج)`);
@@ -12548,14 +12574,14 @@ document.getElementById('confirmCashMove')?.addEventListener('click', () => {
     // سجل الحركة
     cashDrawer.transactions = cashDrawer.transactions || [];
     cashDrawer.transactions.push({
-        timestamp: new Date().toISOString(),
+        timestamp: getLocalDateTimeISO(),
         type,
         amount,
         currency,
         note,
         balanceAfter: { USD: cashDrawer.cashUSD, LBP: cashDrawer.cashLBP }
     });
-    cashDrawer.lastUpdate = new Date().toISOString();
+    cashDrawer.lastUpdate = getLocalDateTimeISO();
     saveToStorage('cashDrawer', cashDrawer);
     updateCashDrawerDisplay();
 
@@ -12576,11 +12602,12 @@ function getRangeByPreset(preset, customFrom, customTo) {
     let to = new Date();
     switch (preset) {
         case 'today':
-            from.setHours(0,0,0,0); 
-            to.setHours(23,59,59,999); 
+            // استخدام الدوال الموحدة للتوقيت المحلي
+            from = getStartOfLocalDay(now);
+            to = getEndOfLocalDay(now);
             console.log('🔍 تحديد نطاق اليوم:', {
-                from: from.toISOString(),
-                to: to.toISOString()
+                from: from.toLocaleString('ar-LB'),
+                to: to.toLocaleString('ar-LB')
             });
             break;
         case 'yesterday':
@@ -12659,11 +12686,9 @@ function getCurrentPresetFromRange(range) {
     const from = new Date(range.from);
     const to = new Date(range.to);
     
-    // اليوم
-    const todayStart = new Date(now);
-    todayStart.setHours(0,0,0,0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23,59,59,999);
+    // اليوم - استخدام الدوال الموحدة
+    const todayStart = getStartOfLocalDay(now);
+    const todayEnd = getEndOfLocalDay(now);
     
     if (from.getTime() === todayStart.getTime() && to.getTime() === todayEnd.getTime()) {
         return 'today';
@@ -14928,7 +14953,7 @@ function processReturn() {
         cashDrawer = loadFromStorage('cashDrawer', {
             cashUSD: 100.00,
             cashLBP: 500000,
-            lastUpdate: new Date().toISOString(),
+            lastUpdate: getLocalDateTimeISO(),
             transactions: []
         });
         
@@ -15008,7 +15033,7 @@ function processReturn() {
         
         // إضافة سجل معاملة
         cashDrawer.transactions.push({
-            timestamp: new Date().toISOString(),
+            timestamp: getLocalDateTimeISO(),
             type: 'refund',
             amount: refundAmount,
             description: `استرجاع ${returnType === 'full' ? 'كامل' : 'جزئي'} للفاتورة ${currentSaleForReturn.invoiceNumber} - المبلغ المرجع: ${refundDetails.join(' + ')}`,
@@ -15018,7 +15043,7 @@ function processReturn() {
             }
         });
         
-        cashDrawer.lastUpdate = new Date().toISOString();
+        cashDrawer.lastUpdate = getLocalDateTimeISO();
         console.log('💳 الصندوق بعد الاسترجاع:', { USD: cashDrawer.cashUSD, LBP: cashDrawer.cashLBP });
         saveToStorage('cashDrawer', cashDrawer);
         updateCashDrawerDisplay();
@@ -15039,7 +15064,7 @@ function processReturn() {
                 customer.currentDebt = customer.creditBalance;
                 if (!Array.isArray(customer.creditHistory)) customer.creditHistory = [];
                 customer.creditHistory.push({
-                    timestamp: new Date().toISOString(),
+                    timestamp: getLocalDateTimeISO(),
                     type: 'refund',
                     amount: -refundAmount,
                     description: `استرجاع على الفاتورة ${currentSaleForReturn.invoiceNumber}`,
@@ -15731,12 +15756,12 @@ document.addEventListener('DOMContentLoaded', function() {
             // تحديث الصندوق
             cashDrawer.cashUSD = newUSD;
             cashDrawer.cashLBP = newLBP;
-            cashDrawer.lastUpdate = new Date().toISOString();
+            cashDrawer.lastUpdate = getLocalDateTimeISO();
             
             // إضافة معاملة توضيحية
             if (diffUSD !== 0 || diffLBP !== 0) {
                 cashDrawer.transactions.push({
-                    date: new Date().toISOString(),
+                    date: getLocalDateTimeISO(),
                     type: 'adjustment',
                     amountUSD: diffUSD,
                     amountLBP: diffLBP,
@@ -17419,7 +17444,7 @@ function processCreditSale() {
             customer.currentDebt = existingDebt + finalTotal;
             customer.creditBalance = customer.currentDebt;
             if (!Array.isArray(customer.creditHistory)) customer.creditHistory = [];
-            customer.creditHistory.push({ timestamp: new Date().toISOString(), type: 'creditSale', amount: finalTotal, description: 'بيع بالدين كامل', balanceAfter: customer.creditBalance });
+            customer.creditHistory.push({ timestamp: getLocalDateTimeISO(), type: 'creditSale', amount: finalTotal, description: 'بيع بالدين كامل', balanceAfter: customer.creditBalance });
             saveToStorage('customers', customers);
             // إنقاص المخزون فوراً لكل بند
             try {
