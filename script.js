@@ -5930,6 +5930,65 @@ function generateTimestampReport() {
     return report;
 }
 
+// دالة لإصلاح الفواتير القديمة وإضافة الحقول الناقصة
+function fixOldInvoicesMissingFields() {
+    console.log('🔧 بدء إصلاح الفواتير القديمة وإضافة الحقول الناقصة...');
+    
+    let fixedCount = 0;
+    let skippedCount = 0;
+    
+    sales.forEach(sale => {
+        if (!sale.items || !Array.isArray(sale.items) || sale.items.length === 0) {
+            return; // تجاهل المبيعات بدون عناصر
+        }
+        
+        let needsFix = false;
+        
+        // فحص كل عنصر في الفاتورة
+        sale.items.forEach(item => {
+            // التحقق من وجود الحقول المطلوبة
+            if (item.costUSD === undefined && item.cost === undefined) {
+                // إضافة cost من قاعدة البيانات
+                const product = products.find(p => p.id === item.id);
+                if (product) {
+                    item.costUSD = product.costUSD || 0;
+                    item.cost = product.costUSD || 0;
+                    needsFix = true;
+                }
+            }
+            
+            // التأكد من وجود priceUSD
+            if (item.priceUSD === undefined) {
+                item.priceUSD = item.price || 0;
+                needsFix = true;
+            }
+            
+            // التأكد من وجود cost إذا كان مفقوداً
+            if (item.costUSD !== undefined && item.cost === undefined) {
+                item.cost = item.costUSD;
+            }
+            if (item.cost !== undefined && item.costUSD === undefined) {
+                item.costUSD = item.cost;
+            }
+        });
+        
+        if (needsFix) {
+            fixedCount++;
+            console.log(`✅ تم إصلاح فاتورة ${sale.invoiceNumber}`);
+        } else {
+            skippedCount++;
+        }
+    });
+    
+    if (fixedCount > 0) {
+        saveToStorage('sales', sales);
+        console.log(`🎉 تم إصلاح ${fixedCount} من الفواتير!`);
+    }
+    
+    console.log(`📊 الإجمالي: ${fixedCount} تم إصلاحها، ${skippedCount} كانت صحيحة`);
+    return { fixed: fixedCount, skipped: skippedCount };
+}
+
 // دالة لإصلاح وتسوية بيانات الربح وإعادة حساب اليوم والأمس
 function recalculateProfitAndFixNegativeValues() {
     console.log('🔧 بدء إعادة حساب الربح وإصلاح القيم السالبة...');
@@ -5941,6 +6000,9 @@ function recalculateProfitAndFixNegativeValues() {
     
     // إصلاح timestamps أولاً
     const timestampResult = fixOldSalesTimestamps();
+    
+    // إصلاح الفواتير المفقودة الحقول
+    const fieldsResult = fixOldInvoicesMissingFields();
     
     // الآن إعادة حساب الربح لكل المبيعات
     sales.forEach(sale => {
@@ -6001,6 +6063,7 @@ function recalculateProfitAndFixNegativeValues() {
     
     return {
         timestampFixed: timestampResult.fixed,
+        fieldsFixed: fieldsResult.fixed,
         profitRecalculated: recalculatedCount,
         negativeProfitFound: fixedCount
     };
@@ -6008,6 +6071,7 @@ function recalculateProfitAndFixNegativeValues() {
 
 // دالة للاختبار والإصلاح اليدوي - يمكن استدعاؤها من console
 window.fixOldSalesTimestamps = fixOldSalesTimestamps;
+window.fixOldInvoicesMissingFields = fixOldInvoicesMissingFields;
 window.checkSalesTimestampsStatus = checkSalesTimestampsStatus;
 window.validateReportsAccuracy = validateReportsAccuracy;
 window.generateTimestampReport = generateTimestampReport;
@@ -8516,19 +8580,29 @@ document.getElementById('processPayment').addEventListener('click', function() {
         const originalUSD = item.priceUSD;
         const discountUSD = Math.max(0, originalUSD - baseUSD);
         const discountPct = originalUSD > 0 ? +(discountUSD / originalUSD * 100).toFixed(1) : 0;
-        saleItems.push({
+        
+        // البحث عن المنتج للحصول على التكلفة
+        const product = products.find(p => p.id === item.id);
+        const costUSD = product ? (product.costUSD || 0) : 0;
+        
+        const saleItem = {
             id: item.id,
             name: item.name,
             quantity: item.quantity,
             price: price,
+            priceUSD: baseUSD,
+            cost: costUSD,
+            costUSD: costUSD,
             originalPriceUSD: originalUSD,
             finalPriceUSD: baseUSD,
             discountUSD: discountUSD,
             discountPct: discountPct
-        });
+        };
+        
+        saleItems.push(saleItem);
+        console.log(`📝 عنصر للفاتورة: ${item.name} - السعر: $${baseUSD.toFixed(2)}, التكلفة: $${costUSD.toFixed(2)}`);
         
         // تحديث المخزون لكل أنواع البيع (نقدي/جزئي/دين)
-        const product = products.find(p => p.id === item.id);
         if (product) {
             product.stock = Math.max(0, (product.stock || 0) - item.quantity);
             // سجل حركة المخزون
@@ -14997,6 +15071,9 @@ function processReturn() {
             name: it.name,
             quantity: Math.max(1, Math.floor((it.quantity || 1) * ratio)),
             price: it.price,
+            priceUSD: it.priceUSD || it.price,
+            cost: it.cost || it.costUSD || 0,
+            costUSD: it.costUSD || it.cost || 0,
             originalPriceUSD: it.originalPriceUSD,
             finalPriceUSD: it.finalPriceUSD,
             discountUSD: it.discountUSD,
@@ -17431,16 +17508,27 @@ function generateInvoiceId() {
             const originalUSD = item.priceUSD || baseUSD;
             const discountUSD = Math.max(0, originalUSD - baseUSD);
             const discountPct = originalUSD > 0 ? +((discountUSD / originalUSD) * 100).toFixed(1) : 0;
-            return {
+            
+            // البحث عن المنتج للحصول على التكلفة
+            const product = products.find(p => p.id === item.id);
+            const costUSD = product ? (product.costUSD || 0) : 0;
+            
+            const creditItem = {
                 id: item.id,
                 name: item.name,
                 quantity: item.quantity || 1,
                 price: baseUSD,
+                priceUSD: baseUSD,
+                cost: costUSD,
+                costUSD: costUSD,
                 originalPriceUSD: originalUSD,
                 finalPriceUSD: baseUSD,
                 discountUSD,
                 discountPct
             };
+            
+            console.log(`📝 عنصر للفاتورة بالدين: ${item.name} - السعر: $${baseUSD.toFixed(2)}, التكلفة: $${costUSD.toFixed(2)}`);
+            return creditItem;
         })
     };
     
