@@ -5093,6 +5093,38 @@ window.addEventListener('message', function(event) {
 // وظائف إدارة البيانات المحلية
 function saveToStorage(key, data) {
     try {
+        // التحقق من صحة البيانات قبل الحفظ
+        if (!data) {
+            console.warn(`⚠️ محاولة حفظ بيانات فارغة للمفتاح: ${key}`);
+            return false;
+        }
+        
+        // نسخة احتياطية قبل التحديث للمفاتيح المهمة
+        if (key === 'sales' || key === 'products' || key === 'customers') {
+            try {
+                const backup = localStorage.getItem(key);
+                if (backup) {
+                    const backupKey = `backup_${key}_${Date.now()}`;
+                    localStorage.setItem(backupKey, backup);
+                    console.log(`💾 تم إنشاء نسخة احتياطية: ${backupKey}`);
+                    
+                    // حذف النسخ القديمة (الاحتفاظ بأحدث 5 فقط)
+                    const allBackups = Object.keys(localStorage)
+                        .filter(k => k.startsWith(`backup_${key}_`))
+                        .sort((a, b) => parseInt(b.split('_').pop()) - parseInt(a.split('_').pop()));
+                    
+                    if (allBackups.length > 5) {
+                        allBackups.slice(5).forEach(oldBackup => {
+                            localStorage.removeItem(oldBackup);
+                            console.log(`🗑️ تم حذف النسخة القديمة: ${oldBackup}`);
+                        });
+                    }
+                }
+            } catch (backupError) {
+                console.warn('⚠️ فشل إنشاء نسخة احتياطية:', backupError);
+            }
+        }
+        
         // إذا كان المفتاح هو products، حدث catalog version ومتغير products
         if (key === 'products') {
             productsCatalogVersion++;
@@ -5100,14 +5132,42 @@ function saveToStorage(key, data) {
             localStorage.setItem('productsLastUpdated', Date.now().toString());
             console.log(`📦 تم تحديث catalog version إلى: ${productsCatalogVersion}`);
             
-            // تحديث متغير products فوراً
+            // تحديث متغير products بعد الحفظ الناجح
             products = data;
             console.log(`🔄 تم تحديث متغير products مباشرة`);
         }
-        localStorage.setItem(key, JSON.stringify(data));
+        
+        // الحفظ الفعلي
+        const serialized = JSON.stringify(data);
+        if (!serialized || serialized === 'null' || serialized === 'undefined') {
+            console.error(`❌ فشل تسلسل البيانات للمفتاح: ${key}`);
+            return false;
+        }
+        
+        localStorage.setItem(key, serialized);
+        console.log(`✅ تم حفظ ${key} بنجاح (${serialized.length} حرف)`);
         return true;
     } catch (error) {
-        console.error('خطأ في حفظ البيانات:', error);
+        console.error('❌ خطأ في حفظ البيانات:', error);
+        
+        // محاولة استعادة النسخة الاحتياطية
+        try {
+            const allBackups = Object.keys(localStorage)
+                .filter(k => k.startsWith(`backup_${key}_`))
+                .sort((a, b) => parseInt(b.split('_').pop()) - parseInt(a.split('_').pop()));
+            
+            if (allBackups.length > 0) {
+                console.log(`🔄 محاولة استعادة النسخة الاحتياطية...`);
+                const latestBackup = localStorage.getItem(allBackups[0]);
+                if (latestBackup) {
+                    localStorage.setItem(key, latestBackup);
+                    console.log(`✅ تم استعادة النسخة الاحتياطية من: ${allBackups[0]}`);
+                }
+            }
+        } catch (restoreError) {
+            console.error('❌ فشل استعادة النسخة الاحتياطية:', restoreError);
+        }
+        
         return false;
     }
 }
@@ -5582,17 +5642,93 @@ function importData(event) {
 }
 
 function saveAllData() {
-    saveToStorage('products', products);
-    saveToStorage('customers', customers);
-    saveToStorage('sales', sales);
-    saveToStorage('suppliers', suppliers);
-    saveToStorage('settings', settings);
-    saveToStorage('cashDrawer', cashDrawer);
-    saveToStorage('purchases', purchases);
-    saveToStorage('supplierPayments', supplierPayments);
-    saveToStorage('purchaseReturns', purchaseReturns);
-    saveToStorage('supplierLedger', supplierLedger);
+    console.log('💾 بدء حفظ جميع البيانات...');
+    
+    try {
+        // الحفظ مع التحقق من النجاح
+        const results = {
+            products: saveToStorage('products', products),
+            customers: saveToStorage('customers', customers),
+            sales: saveToStorage('sales', sales),
+            suppliers: saveToStorage('suppliers', suppliers),
+            settings: saveToStorage('settings', settings),
+            cashDrawer: saveToStorage('cashDrawer', cashDrawer),
+            purchases: saveToStorage('purchases', purchases),
+            supplierPayments: saveToStorage('supplierPayments', supplierPayments),
+            purchaseReturns: saveToStorage('purchaseReturns', purchaseReturns),
+            supplierLedger: saveToStorage('supplierLedger', supplierLedger)
+        };
+        
+        const failed = Object.entries(results).filter(([k, v]) => !v);
+        if (failed.length > 0) {
+            console.error(`❌ فشل حفظ المفاتيح التالية: ${failed.map(([k]) => k).join(', ')}`);
+            return false;
+        }
+        
+        console.log('✅ تم حفظ جميع البيانات بنجاح');
+        return true;
+    } catch (error) {
+        console.error('❌ خطأ في حفظ البيانات:', error);
+        return false;
+    }
 }
+
+// دالة لاسترجاع البيانات المفقودة من النسخ الاحتياطية
+function recoverMissingData() {
+    console.log('🔄 بدء استرجاع البيانات المفقودة...');
+    
+    let recoveredCount = 0;
+    const keysToCheck = ['sales', 'products', 'customers'];
+    
+    keysToCheck.forEach(key => {
+        try {
+            const current = loadFromStorage(key, null);
+            
+            // إذا كانت البيانات فارغة أو غير كافية
+            if (!current || !Array.isArray(current) || current.length === 0) {
+                console.log(`⚠️ ${key} فارغ - محاولة استرجاع من النسخ الاحتياطية...`);
+                
+                // البحث عن آخر نسخة احتياطية
+                const allBackups = Object.keys(localStorage)
+                    .filter(k => k.startsWith(`backup_${key}_`))
+                    .sort((a, b) => parseInt(b.split('_').pop()) - parseInt(a.split('_').pop()));
+                
+                if (allBackups.length > 0) {
+                    const latestBackup = localStorage.getItem(allBackups[0]);
+                    if (latestBackup) {
+                        const restored = JSON.parse(latestBackup);
+                        if (restored && Array.isArray(restored) && restored.length > 0) {
+                            // تحديث المتغير والـlocalStorage
+                            if (key === 'sales') sales = restored;
+                            else if (key === 'products') products = restored;
+                            else if (key === 'customers') customers = restored;
+                            
+                            localStorage.setItem(key, latestBackup);
+                            recoveredCount++;
+                            console.log(`✅ تم استرجاع ${restored.length} من ${key} من النسخة الاحتياطية`);
+                        }
+                    }
+                } else {
+                    console.warn(`❌ لا توجد نسخ احتياطية لـ ${key}`);
+                }
+            }
+        } catch (error) {
+            console.error(`❌ خطأ في استرجاع ${key}:`, error);
+        }
+    });
+    
+    if (recoveredCount > 0) {
+        console.log(`🎉 تم استرجاع ${recoveredCount} مجموعة بيانات من النسخ الاحتياطية`);
+        showMessage(`تم استرجاع ${recoveredCount} مجموعة بيانات من النسخ الاحتياطية`, 'success');
+    } else {
+        console.log('✅ لا توجد بيانات مفقودة');
+    }
+    
+    return recoveredCount;
+}
+
+// جعل الدالة متاحة من Console
+window.recoverMissingData = recoverMissingData;
 
 // سكربت إصلاح timestamps المبيعات القديمة
 function fixOldSalesTimestamps() {
@@ -16742,6 +16878,13 @@ document.addEventListener('DOMContentLoaded', function() {
             // تشغيل الفحص مرة واحدة في اليوم فقط
             if (lastFixCheck !== today) {
                 console.log('🔍 فحص يومي شامل لتوقيت وربح المبيعات...');
+                
+                // أولاً: محاولة استرجاع أي بيانات مفقودة
+                try {
+                    recoverMissingData();
+                } catch (error) {
+                    console.error('خطأ في استرجاع البيانات:', error);
+                }
                 
                 // تشغيل الإصلاح الشامل (يقوم بإصلاح timestamps وإعادة حساب الربح)
                 try {
