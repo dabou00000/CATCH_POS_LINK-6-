@@ -5841,6 +5841,50 @@ function importData(event) {
     reader.readAsText(file);
 }
 
+// استيراد المنتجات والعملاء فقط من ملف JSON
+function importProductsCustomers(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!data || (typeof data !== 'object')) { showMessage('ملف غير صالح', 'error'); return; }
+            if (!confirm('هل تريد استيراد العملاء والمنتجات فقط؟ سيتم استبدال القوائم الحالية.')) return;
+
+            // تحديث البيانات في الذاكرة إن وجدت
+            if (Array.isArray(data.products)) {
+                products = data.products;
+            }
+            if (Array.isArray(data.customers)) {
+                customers = data.customers;
+            }
+
+            // حفظ فقط المنتجات والعملاء
+            const okProd = saveToStorage('products', products);
+            const okCust = saveToStorage('customers', customers);
+            if (!okProd || !okCust) {
+                showMessage('فشل حفظ العملاء/المنتجات بعد الاستيراد', 'error');
+                return;
+            }
+
+            // تحديث الواجهات ذات الصلة
+            try { updateProductsDisplay(); } catch(_) {}
+            try { updateCustomersDisplay(); } catch(_) {}
+            try { updatePOSIfActive?.(); } catch(_) {}
+            try { updateDashboardIfActive?.(); } catch(_) {}
+
+            showMessage('تم استيراد العملاء والمنتجات بنجاح', 'success');
+        } catch(err) {
+            console.error('importProductsCustomers error:', err);
+            showMessage('خطأ في قراءة الملف. تأكد من صحة تنسيق الملف.', 'error');
+        } finally {
+            try { event.target.value = ''; } catch(_) {}
+        }
+    };
+    reader.readAsText(file);
+}
+
 function saveAllData() {
     console.log('💾 بدء حفظ جميع البيانات...');
     
@@ -14178,6 +14222,7 @@ function exportTableToPDF(title) {
 // إعداد أحداث النسخ الاحتياطي والاستيراد
 document.getElementById('exportDataBtn').addEventListener('click', exportData);
 document.getElementById('importFile').addEventListener('change', importData);
+document.getElementById('importPCFile')?.addEventListener('change', importProductsCustomers);
 document.getElementById('clearDataBtn').addEventListener('click', clearAllOperationalData);
 
 // إعداد إعدادات النسخ الاحتياطي التلقائي
