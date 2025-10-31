@@ -4395,6 +4395,8 @@ function translateReportPresets() {
     if (applyBtn) applyBtn.textContent = getText('apply');
     const openHist = document.getElementById('openSalesHistory');
     if (openHist) { const icon = openHist.querySelector('i'); openHist.textContent = getText('sales-history'); if (icon) openHist.prepend(icon); }
+    const restoreBtn = document.getElementById('restoreInvoicesBtn');
+    if (restoreBtn) { const icon = restoreBtn.querySelector('i'); restoreBtn.textContent = (getText('restore-invoices') || 'استرجاع الفواتير'); if (icon) restoreBtn.prepend(icon); }
 }
 
 // ترجمة واجهة سجل الصندوق (الرؤوس، الفلاتر، العنوان، زر تحميل المزيد)
@@ -4755,7 +4757,9 @@ let customers = loadFromStorage('customers', [
     }
 ]);
 
-let sales = loadFromStorage('sales', [
+// تحميل المبيعات مع حماية ضد الفقدان
+let sales = (function() {
+    const defaultSales = [
     {
         id: 1,
         invoiceNumber: 'INV-001',
@@ -4782,7 +4786,38 @@ let sales = loadFromStorage('sales', [
             {id: 4, name: 'ماء', quantity: 2, price: 0.25}
         ]
     }
-]);
+    ];
+    
+    const loaded = loadFromStorage('sales', defaultSales);
+    
+    // التحقق من صحة البيانات المحملة
+    if (!Array.isArray(loaded)) {
+        console.error('❌ المبيعات المحملة ليست مصفوفة صحيحة!');
+        const recovered = recoverSalesFromBackup();
+        if (recovered && recovered.length > 0) {
+            console.log(`✅ تم استرجاع ${recovered.length} مبيعة عند التهيئة`);
+            allowSalesDestructiveOnce = true;
+            saveToStorage('sales', recovered);
+            return recovered;
+        }
+        return defaultSales;
+    }
+    
+    // إذا كانت المبيعات فارغة ولكن هناك نسخ احتياطية، استرجاعها
+    if (loaded.length === 0) {
+        const recovered = recoverSalesFromBackup();
+        if (recovered && recovered.length > 0) {
+            console.log(`✅ تم استرجاع ${recovered.length} مبيعة من النسخ الاحتياطية عند التهيئة`);
+            allowSalesDestructiveOnce = true;
+            saveToStorage('sales', recovered);
+            return recovered;
+        }
+        return defaultSales;
+    }
+    
+    console.log(`✅ تم تحميل ${loaded.length} مبيعة بنجاح`);
+    return loaded;
+})();
 
 let suppliers = loadFromStorage('suppliers', [
     {
@@ -5093,6 +5128,8 @@ window.addEventListener('message', function(event) {
 // وظائف إدارة البيانات المحلية
 // نظام قفل الكتابة لمنع الكتابة المتداخلة
 let storageWriteLock = false;
+// سماح لمرة واحدة بحفظ يقلّص مبيعات (للاسترجاع/الاستيراد فقط)
+let allowSalesDestructiveOnce = false;
 
 function saveToStorage(key, data) {
     // منع الكتابة المتداخلة
@@ -5109,6 +5146,62 @@ function saveToStorage(key, data) {
         if (!data) {
             console.warn(`⚠️ محاولة حفظ بيانات فارغة للمفتاح: ${key}`);
             return false;
+        }
+        
+        // سنستخدم dataToStore للسماح بالدمج عند الحاجة
+        let dataToStore = data;
+        
+        // حماية: منع تقليص مبيعات بالخطأ مع محاولة دمج تلقائي
+        if (key === 'sales' && Array.isArray(data)) {
+            try {
+                const existingStr = localStorage.getItem('sales');
+                if (existingStr) {
+                    const existing = JSON.parse(existingStr);
+                    if (Array.isArray(existing)) {
+                        const existingLen = existing.length;
+                        const incomingLen = data.length;
+                        if (incomingLen < existingLen && !allowSalesDestructiveOnce) {
+                            // محاولة دمج المبيعات لتكوين مجموعة فوقية تمنع الفقدان
+                            try {
+                                const byKey = new Map();
+                                const addAll = (arr) => {
+                                    (arr || []).forEach(s => {
+                                        if (!s) return;
+                                        const key1 = s.invoiceNumber ? String(s.invoiceNumber) : '';
+                                        const key2 = (s.id != null) ? `id:${s.id}` : '';
+                                        const key3 = s.timestamp ? `ts:${s.timestamp}` : (s.date ? `d:${s.date}` : '');
+                                        const k = key1 || key2 || key3 || `idx:${byKey.size}`;
+                                        if (!byKey.has(k)) byKey.set(k, s);
+                                    });
+                                };
+                                addAll(existing);
+                                addAll(data);
+                                const merged = Array.from(byKey.values());
+                                if (merged.length >= existingLen) {
+                                    dataToStore = merged;
+                                    console.warn(`ℹ️ تم دمج المبيعات لتفادي تقليص غير مقصود: ${incomingLen} -> ${merged.length} (السابق في التخزين: ${existingLen})`);
+                                } else {
+                                    // إذا فشل الدمج بالحفاظ على الحجم، نعزل ونمنع الكتابة
+                                    const quarantineKey = `blocked_sales_${Date.now()}`;
+                                    localStorage.setItem(quarantineKey, JSON.stringify(data));
+                                    console.error(`❌ محاولة حفظ مُصغِّرة لجدول المبيعات تم حظرها بعد دمج غير كافٍ. الحالي: ${existingLen}, الوارد: ${incomingLen}, المدموج: ${merged.length}. عُزلت في ${quarantineKey}`);
+                                    return false;
+                                }
+                            } catch (qerr) {
+                                console.warn('⚠️ فشل دمج المبيعات، سيتم عزل ومنع الحفظ:', qerr);
+                                try { const quarantineKey = `blocked_sales_${Date.now()}`; localStorage.setItem(quarantineKey, JSON.stringify(data)); } catch(_) {}
+                                return false;
+                            }
+                        }
+                    }
+                }
+            } catch (guardErr) {
+                console.warn('⚠️ فشل فحص حماية المبيعات:', guardErr);
+            } finally {
+                if (allowSalesDestructiveOnce && key === 'sales') {
+                    allowSalesDestructiveOnce = false;
+                }
+            }
         }
         
         // نسخة احتياطية قبل التحديث للمفاتيح المهمة
@@ -5150,7 +5243,7 @@ function saveToStorage(key, data) {
         }
         
         // الحفظ الفعلي
-        const serialized = JSON.stringify(data);
+        const serialized = JSON.stringify(dataToStore);
         if (!serialized || serialized === 'null' || serialized === 'undefined') {
             console.error(`❌ فشل تسلسل البيانات للمفتاح: ${key}`);
             return false;
@@ -5208,10 +5301,101 @@ function translateInvoices() {
 function loadFromStorage(key, defaultValue = null) {
     try {
         const data = localStorage.getItem(key);
-        return data ? JSON.parse(data) : defaultValue;
+        if (!data) {
+            // إذا كان المفتاح هو 'sales' وكانت البيانات فارغة، محاولة الاسترجاع من النسخ الاحتياطية
+            if (key === 'sales' && defaultValue !== null && Array.isArray(defaultValue)) {
+                console.warn('⚠️ المبيعات غير موجودة في localStorage، محاولة الاسترجاع من النسخ الاحتياطية...');
+                const recovered = recoverSalesFromBackup();
+                if (recovered && recovered.length > 0) {
+                    console.log(`✅ تم استرجاع ${recovered.length} مبيعة من النسخ الاحتياطية`);
+                    // حفظ المبيعات المسترجعة
+                    allowSalesDestructiveOnce = true;
+                    saveToStorage('sales', recovered);
+                    return recovered;
+                }
+            }
+            return defaultValue;
+        }
+        
+        const parsed = JSON.parse(data);
+        
+        // حماية خاصة للمبيعات: التأكد من أنها مصفوفة صحيحة
+        if (key === 'sales') {
+            if (!Array.isArray(parsed)) {
+                console.error('❌ المبيعات ليست مصفوفة صحيحة! محاولة الاسترجاع...');
+                const recovered = recoverSalesFromBackup();
+                if (recovered && recovered.length > 0) {
+                    console.log(`✅ تم استرجاع ${recovered.length} مبيعة من النسخ الاحتياطية`);
+                    allowSalesDestructiveOnce = true;
+                    saveToStorage('sales', recovered);
+                    return recovered;
+                }
+                return defaultValue || [];
+            }
+            
+            // التحقق من أن المبيعات ليست مصفوفة فارغة (إذا كان هناك نسخة احتياطية أفضل)
+            if (parsed.length === 0) {
+                console.warn('⚠️ المبيعات فارغة، محاولة الاسترجاع من النسخ الاحتياطية...');
+                const recovered = recoverSalesFromBackup();
+                if (recovered && recovered.length > 0) {
+                    console.log(`✅ تم استرجاع ${recovered.length} مبيعة من النسخ الاحتياطية`);
+                    allowSalesDestructiveOnce = true;
+                    saveToStorage('sales', recovered);
+                    return recovered;
+                }
+            }
+        }
+        
+        return parsed;
     } catch (error) {
         console.error('خطأ في تحميل البيانات:', error);
+        
+        // محاولة الاسترجاع للمبيعات
+        if (key === 'sales') {
+            const recovered = recoverSalesFromBackup();
+            if (recovered && recovered.length > 0) {
+                console.log(`✅ تم استرجاع ${recovered.length} مبيعة بعد خطأ التحميل`);
+                saveToStorage('sales', recovered);
+                return recovered;
+            }
+        }
+        
         return defaultValue;
+    }
+}
+
+// دالة مساعدة لاسترجاع المبيعات من النسخ الاحتياطية
+function recoverSalesFromBackup() {
+    try {
+        // البحث عن أحدث نسخة احتياطية
+        const allBackups = Object.keys(localStorage)
+            .filter(k => k.startsWith('backup_sales_'))
+            .sort((a, b) => parseInt(b.split('_').pop()) - parseInt(a.split('_').pop()));
+        
+        if (allBackups.length > 0) {
+            // محاولة استرجاع آخر 3 نسخ احتياطية
+            for (let i = 0; i < Math.min(3, allBackups.length); i++) {
+                try {
+                    const backupData = localStorage.getItem(allBackups[i]);
+                    if (backupData) {
+                        const parsed = JSON.parse(backupData);
+                        if (Array.isArray(parsed) && parsed.length > 0) {
+                            console.log(`✅ تم العثور على نسخة احتياطية صالحة: ${allBackups[i]} (${parsed.length} مبيعة)`);
+                            return parsed;
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ فشل تحميل النسخة الاحتياطية ${allBackups[i]}:`, e);
+                    continue;
+                }
+            }
+        }
+        
+        console.warn('⚠️ لا توجد نسخ احتياطية صالحة للمبيعات');
+        return null;
+    } catch (error) {
+        console.error('❌ خطأ في استرجاع النسخ الاحتياطية:', error);
+        return null;
     }
 }
 
@@ -5644,7 +5828,8 @@ function importData(event) {
                 saveToStorage(LICENSE_STATE_KEY, data.license_state);
             }
 
-            // persist main arrays
+            // persist main arrays (السماح لمرة واحدة بحفظ قد يكون أصغر للمبيعات)
+            allowSalesDestructiveOnce = true;
             saveAllData();
 
             // reload to ensure all UI and caches reflect the imported state
@@ -5755,6 +5940,55 @@ function recoverMissingData() {
 
 // جعل الدالة متاحة من Console
 window.recoverMissingData = recoverMissingData;
+
+// استرجاع الفواتير المفقودة من النسخ الاحتياطية مع دمج آمن
+function restoreLostInvoices() {
+    try {
+        const current = loadFromStorage('sales', []);
+        const recovered = recoverSalesFromBackup();
+        if (!recovered || !Array.isArray(recovered) || recovered.length === 0) {
+            showMessage('لا توجد نسخ احتياطية صالحة للفواتير لاسترجاعها', 'warning');
+            return;
+        }
+        // خريطة للفواتير الحالية حسب رقم الفاتورة
+        const existingByInvoice = new Map();
+        current.forEach(s => { if (s && s.invoiceNumber) existingByInvoice.set(s.invoiceNumber, s); });
+        let added = 0;
+        recovered.forEach(s => {
+            if (s && s.invoiceNumber && !existingByInvoice.has(s.invoiceNumber)) {
+                current.push(s);
+                added++;
+            }
+        });
+        // إذا لم تُضَف فواتير جديدة لكن النسخة المسترجعة تحتوي فواتير أكثر فريدة، استبدل بالكامل
+        if (added === 0) {
+            const recSet = new Set(recovered.map(s => s && s.invoiceNumber).filter(Boolean));
+            const curSet = new Set(current.map(s => s && s.invoiceNumber).filter(Boolean));
+            if (recSet.size > curSet.size) {
+                allowSalesDestructiveOnce = true; // السماح لهذه العملية فقط
+                saveToStorage('sales', recovered);
+                sales = recovered;
+                updateSalesDisplay?.();
+                updateDashboardIfActive?.();
+                showMessage(`✅ تم استرجاع ${(recSet.size - curSet.size)} فاتورة من نسخة احتياطية أحدث`, 'success');
+                return;
+            }
+        }
+        if (added > 0) {
+            allowSalesDestructiveOnce = true; // ليس تقليصاً لكن للسلامة
+            saveToStorage('sales', current);
+            sales = current;
+            updateSalesDisplay?.();
+            updateDashboardIfActive?.();
+            showMessage(`✅ تم استرجاع ${added} فاتورة من النسخ الاحتياطية`, 'success');
+        } else {
+            showMessage('لا توجد فواتير إضافية للاسترجاع. البيانات الحالية محدثة.', 'info');
+        }
+    } catch (e) {
+        console.error('restoreLostInvoices error', e);
+        showMessage('حدث خطأ أثناء استرجاع الفواتير. حاول مجدداً.', 'error');
+    }
+}
 
 // سكربت إصلاح timestamps المبيعات القديمة
 function fixOldSalesTimestamps() {
@@ -7162,7 +7396,26 @@ function loadDashboard() {
         // إعادة تحميل البيانات من التخزين المحلي للتأكد من أحدث البيانات
         products = getCurrentProducts();
         customers = loadFromStorage('customers', []);
-        sales = loadFromStorage('sales', []);
+        // حماية المبيعات: التأكد من عدم استبدالها بمصفوفة فارغة
+        const loadedSales = loadFromStorage('sales', []);
+        if (Array.isArray(loadedSales) && loadedSales.length > 0) {
+            sales = loadedSales;
+        } else if (sales && sales.length > 0) {
+            // إذا كانت المبيعات المحملة فارغة ولكن هناك مبيعات في الذاكرة، احفظها
+            console.warn('⚠️ المبيعات المحملة فارغة، استخدام المبيعات من الذاكرة...');
+            saveToStorage('sales', sales);
+        } else {
+            // محاولة الاسترجاع من النسخ الاحتياطية
+            const recovered = recoverSalesFromBackup();
+            if (recovered && recovered.length > 0) {
+            console.log(`✅ تم استرجاع ${recovered.length} مبيعة للوحة التحكم`);
+            sales = recovered;
+            allowSalesDestructiveOnce = true;
+            saveToStorage('sales', sales);
+            } else {
+                sales = [];
+            }
+        }
         
         // حساب إيرادات اليوم (المبيعات اليوم فقط) - استخدام التوقيت المحلي الموحد
         const today = getLocalDateString();
@@ -7179,8 +7432,9 @@ function loadDashboard() {
                 // فقط المبيعات المكتملة (paid) أو الجزئية (partial)
                 // المبيعات النقدية تعتبر paid تلقائياً
                 // المبيعات الجزئية لها partialDetails
-                const isPaid = sale.paymentMethod === 'نقدي' || sale.paymentMethod === 'Cash';
-                const isPartial = sale.partialDetails && sale.partialDetails.amountPaid > 0;
+                const pm = String(sale.paymentMethod || '').toLowerCase().trim();
+                const isPaid = pm.includes('نقد') || pm.includes('cash') || !!sale.cashDetails;
+                const isPartial = !!(sale.partialDetails && sale.partialDetails.amountPaid > 0);
                 
                 return isPaid || isPartial;
             } catch (error) {
@@ -8715,7 +8969,7 @@ document.getElementById('processPayment').addEventListener('click', function() {
     const localDateTimeISO = getLocalDateTimeISO();
     const newSale = {
         id: sales.length + 1,
-        invoiceNumber: `INV-${(sales.length + 1).toString().padStart(3, '0')}`,
+        invoiceNumber: nextInvoiceNumber('INV'),
         date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`, // التاريخ المحلي
         timestamp: localDateTimeISO, // التاريخ والوقت الكامل بالوقت المحلي
         customer: customerName,
@@ -8764,7 +9018,58 @@ document.getElementById('processPayment').addEventListener('click', function() {
     } catch(e) {}
 
     console.log('🔄 [POS] About to push newSale:', newSale);
+    
+    // حفظ نسخة من المبيعات قبل الإضافة (للحماية)
+    const previousSalesCount = sales.length;
+    const previousSalesBackup = JSON.stringify(sales);
+    
     sales.push(newSale);
+    
+    // حفظ المبيعات مباشرة مع التحقق من النجاح
+    const saveSuccess = saveToStorage('sales', sales);
+    
+    if (!saveSuccess) {
+        console.error('❌ فشل حفظ المبيعة! محاولة الاسترجاع...');
+        // استرجاع المبيعات من النسخة الاحتياطية
+        sales = JSON.parse(previousSalesBackup);
+        
+        // محاولة حفظ مرة أخرى
+        let retryCount = 0;
+        const maxRetries = 3;
+        while (retryCount < maxRetries && !saveToStorage('sales', sales)) {
+            retryCount++;
+            console.warn(`⚠️ محاولة الحفظ ${retryCount}/${maxRetries}...`);
+            // إعادة إضافة المبيعة قبل المحاولة
+            sales.push(newSale);
+        }
+        
+        if (retryCount >= maxRetries) {
+            console.error('❌ فشل حفظ المبيعة بعد جميع المحاولات!');
+            showMessage('تحذير: فشل حفظ المبيعة. يرجى التحقق من البيانات.', 'error');
+            // إزالة المبيعة المضافة إذا فشل الحفظ
+            sales.pop();
+            return;
+        }
+    }
+    
+    // التحقق من أن المبيعة تم حفظها بالفعل
+    const savedSales = loadFromStorage('sales', []);
+    if (savedSales.length < sales.length) {
+        console.error('❌ المبيعة غير موجودة في التخزين! محاولة الاسترجاع...');
+        // إعادة الحفظ
+        saveToStorage('sales', sales);
+        
+        // التحقق مرة أخرى
+        const recheckSales = loadFromStorage('sales', []);
+        if (recheckSales.length < sales.length) {
+            console.error('❌ فشل التحقق من حفظ المبيعة!');
+            showMessage('تحذير: قد تكون المبيعة غير محفوظة. يرجى التحقق يدوياً.', 'error');
+        }
+    }
+    
+    console.log(`✅ تم حفظ المبيعة بنجاح. إجمالي المبيعات: ${sales.length}`);
+    
+    // حفظ باقي البيانات
     saveAllData();
     
     // تحديث إجمالي مشتريات العملاء
@@ -12548,6 +12853,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // فلترة التقارير حسب الفترات الجاهزة أو تاريخ مخصص - تم نقلها إلى setupReportEventListeners
 
 document.getElementById('openSalesHistory')?.addEventListener('click', openSalesHistory);
+document.getElementById('restoreInvoicesBtn')?.addEventListener('click', restoreLostInvoices);
 document.getElementById('openCashMove')?.addEventListener('click', () => {
     showModal('cashMoveModal');
     setTimeout(() => fixCashMoveModal(), 100);
@@ -15108,7 +15414,7 @@ function processReturn() {
         const localDateTimeISO = getLocalDateTimeISO();
         const refundInvoice = {
             id: generateInvoiceId(),
-            invoiceNumber: `RF-${(sales.length + 1).toString().padStart(3, '0')}`,
+            invoiceNumber: nextInvoiceNumber('RF'),
             customerId: currentSaleForReturn.customerId,
             customer: currentSaleForReturn.customer,
             amount: refundAmount,
@@ -15322,8 +15628,9 @@ function updateDashboardDirectly() {
                 if (sale.returned || sale.cancelled) return false;
                 
                 // فقط المبيعات المكتملة (paid) أو الجزئية (partial)
-                const isPaid = sale.paymentMethod === 'نقدي' || sale.paymentMethod === 'Cash';
-                const isPartial = sale.partialDetails && sale.partialDetails.amountPaid > 0;
+                const pm = String(sale.paymentMethod || '').toLowerCase().trim();
+                const isPaid = pm.includes('نقد') || pm.includes('cash') || !!sale.cashDetails;
+                const isPartial = !!(sale.partialDetails && sale.partialDetails.amountPaid > 0);
                 
                 return isPaid || isPartial;
             } catch (error) {
@@ -15415,7 +15722,24 @@ function fixDashboard() {
     // إعادة تحميل جميع البيانات
     products = getCurrentProducts();
     customers = loadFromStorage('customers', []);
-    sales = loadFromStorage('sales', []);
+    // حماية المبيعات: التأكد من عدم استبدالها بمصفوفة فارغة
+    const loadedSales = loadFromStorage('sales', []);
+    if (Array.isArray(loadedSales) && loadedSales.length > 0) {
+        sales = loadedSales;
+    } else if (sales && sales.length > 0) {
+        console.warn('⚠️ المبيعات المحملة فارغة، استخدام المبيعات من الذاكرة...');
+        saveToStorage('sales', sales);
+    } else {
+        const recovered = recoverSalesFromBackup();
+        if (recovered && recovered.length > 0) {
+            console.log(`✅ تم استرجاع ${recovered.length} مبيعة`);
+            sales = recovered;
+            allowSalesDestructiveOnce = true;
+            saveToStorage('sales', sales);
+        } else {
+            sales = [];
+        }
+    }
     
     console.log('البيانات المحملة:', {
         products: products.length,
@@ -17513,13 +17837,56 @@ function generateInvoiceId() {
     return prefix + time + '-' + rand;
 }
 
+// تسلسل رقمي متواصل للفواتير لضمان عدم تكرار الأرقام حتى بعد الاسترجاع
+function getCurrentInvoiceSeq() {
+    const v = parseInt(localStorage.getItem('invoice_seq') || '0', 10);
+    return Number.isFinite(v) ? v : 0;
+}
+
+function setCurrentInvoiceSeq(seq) {
+    localStorage.setItem('invoice_seq', String(Math.max(0, seq | 0)));
+}
+
+function scanMaxInvoiceSeqFromSales() {
+    let maxSeq = 0;
+    try {
+        const re = /^(INV|CR|RF)-(\d+)$/;
+        (sales || []).forEach(s => {
+            const num = (s && typeof s.invoiceNumber === 'string') ? s.invoiceNumber : '';
+            const m = re.exec(num);
+            if (m && m[2]) {
+                const n = parseInt(m[2], 10);
+                if (Number.isFinite(n)) maxSeq = Math.max(maxSeq, n);
+            }
+        });
+    } catch (e) {
+        console.warn('scanMaxInvoiceSeqFromSales failed:', e);
+    }
+    return maxSeq;
+}
+
+function ensureInvoiceSequenceInitialized() {
+    const current = getCurrentInvoiceSeq();
+    const scanned = scanMaxInvoiceSeqFromSales();
+    if (current < scanned) setCurrentInvoiceSeq(scanned);
+}
+
+function nextInvoiceNumber(prefix) {
+    ensureInvoiceSequenceInitialized();
+    const curr = getCurrentInvoiceSeq();
+    const next = curr + 1;
+    setCurrentInvoiceSeq(next);
+    const p = String(next).padStart(3, '0');
+    return `${prefix}-${p}`;
+}
+
 // إنشاء فاتورة البيع بالدين
  function createCreditSaleInvoice(customer, amount) {
     const now = new Date();
     const localDateTimeISO = getLocalDateTimeISO();
     const invoice = {
         id: generateInvoiceId(),
-        invoiceNumber: `CR-${(sales.length + 1).toString().padStart(3, '0')}`,
+        invoiceNumber: nextInvoiceNumber('CR'),
         customerId: customer.id,
         customerName: customer.name,
         amount: amount,
@@ -17564,8 +17931,50 @@ function generateInvoiceId() {
         saveToStorage('stockMovements', movements);
     } catch(e) {}
 
+    // حفظ نسخة من المبيعات قبل الإضافة (للحماية)
+    const previousSalesBackup = JSON.stringify(sales);
+    
     sales.push(invoice);
-    saveToStorage('sales', sales);
+    
+    // حفظ المبيعات مباشرة مع التحقق من النجاح
+    const saveSuccess = saveToStorage('sales', sales);
+    
+    if (!saveSuccess) {
+        console.error('❌ فشل حفظ فاتورة الدين! محاولة الاسترجاع...');
+        // استرجاع المبيعات من النسخة الاحتياطية
+        sales = JSON.parse(previousSalesBackup);
+        
+        // محاولة حفظ مرة أخرى
+        let retryCount = 0;
+        const maxRetries = 3;
+        while (retryCount < maxRetries && !saveToStorage('sales', sales)) {
+            retryCount++;
+            console.warn(`⚠️ محاولة الحفظ ${retryCount}/${maxRetries}...`);
+            sales.push(invoice);
+        }
+        
+        if (retryCount >= maxRetries) {
+            console.error('❌ فشل حفظ فاتورة الدين بعد جميع المحاولات!');
+            showMessage('تحذير: فشل حفظ فاتورة الدين. يرجى التحقق من البيانات.', 'error');
+            sales.pop();
+            return;
+        }
+    }
+    
+    // التحقق من أن الفاتورة تم حفظها بالفعل
+    const savedSales = loadFromStorage('sales', []);
+    if (savedSales.length < sales.length) {
+        console.error('❌ فاتورة الدين غير موجودة في التخزين! محاولة الاسترجاع...');
+        saveToStorage('sales', sales);
+        
+        const recheckSales = loadFromStorage('sales', []);
+        if (recheckSales.length < sales.length) {
+            console.error('❌ فشل التحقق من حفظ فاتورة الدين!');
+            showMessage('تحذير: قد تكون فاتورة الدين غير محفوظة. يرجى التحقق يدوياً.', 'error');
+        }
+    }
+    
+    console.log(`✅ تم حفظ فاتورة الدين بنجاح. إجمالي المبيعات: ${sales.length}`);
     // سجل المبيعات: البيع بالدين - استخدام نفس timestamp الفاتورة
     const salesLogs = loadFromStorage('salesLogs', []);
     salesLogs.push({
